@@ -6,13 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"io"
 	"os"
 	"bytes"
-	"encoding/binary" 
-	"io/ioutil"
+	"encoding/binary"
 	"encoding/json"
-	"net/url"
+	"strings"
+	"./BaiduAi"
 )
 
 // http升级websocket协议的配置
@@ -22,6 +21,8 @@ var wsUpgrader = websocket.Upgrader{
 		return true
 	},
 }
+
+var audioBuf = new(bytes.Buffer)
 
 // 客户端读写消息
 type wsMessage struct {
@@ -49,15 +50,25 @@ func (wsConn *wsConnection)wsReadLoop() {
 			goto error
 		}
 		
-		req := &wsMessage{
-			msgType,
-			data,
+		err = binary.Write(audioBuf, binary.BigEndian, data) 
+		if err != nil { 
+		  panic(err) 
 		}
-		// 放入请求队列
-		select {
-		case wsConn.inChan <- req:
-		case <- wsConn.closeChan:
-			goto closed
+		
+		//因为百度 http 接口是上传整个文件，需要包含整句话语
+		if audioBuf.Len() > 1024*200 {
+			req := &wsMessage{
+				msgType,
+				audioBuf.Bytes(),
+			}
+			// 放入请求队列
+			select {
+			case wsConn.inChan <- req:
+			case <- wsConn.closeChan:
+				goto closed
+			}
+			
+			audioBuf.Reset()
 		}
 	}
 error:
@@ -81,63 +92,6 @@ func (wsConn *wsConnection)wsWriteLoop() {
 error:
 	wsConn.wsClose()
 closed:
-}
-
-func getText(bodys io.Reader, rate string) ([]byte, error) { 
-
-	req, err := http.NewRequest("POST", "http://vop.baidu.com/server_api?dev_pid=1536&cuid=80001&token=24.8c2ab6a8feca6534d5fcd68346e13203.2592000.1558181252.282335-16055618", bodys) 
-	if err != nil { 
-	  return nil, err 
-	} 
-	
-	var httpclient *http.Client = &http.Client{} 
-	req.Header.Add("Content-Type", "audio/pcm;rate="+rate) 
-	resp, err := httpclient.Do(req) 
-
-	if err != nil { 
-	  return nil, err 
-	} 
-	defer resp.Body.Close() 
-
-	var r io.Reader = resp.Body 
-
-	body, err := ioutil.ReadAll(r) 
-	if err != nil { 
-	  return nil, err 
-	} 
-	if resp.StatusCode != 200 { 
-	  msg := fmt.Sprintf("handlePost statuscode=%d, body=%s", resp.StatusCode, body) 
-	  return nil, errors.New(msg) 
-	} 
-	return body, nil 
-} 
-
-func Text2Speech(tex *url.URL) ([]byte, error) {
-	
-	req, err := http.NewRequest("GET", "http://tsn.baidu.com/text2audio?tex=" + tex.EscapedPath() + "&lan=zh&cuid=80001&ctp=1&tok=24.349f1237eb7b5b64c4d7571a824c46b4.2592000.1558182477.282335-16055618", nil)
-	if err != nil {
-		return nil, err
-	}
-
-	var httpclient *http.Client = &http.Client{}
-	resp, err := httpclient.Do(req)
-
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var r io.Reader = resp.Body
-
-	body, err := ioutil.ReadAll(r)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode != 200 {
-		msg := fmt.Sprintf("handlePost statuscode=%d, body=%s", resp.StatusCode, body)
-		return nil, errors.New(msg)
-	}
-	return body, nil
 }
 
 type ASR struct {
@@ -182,7 +136,7 @@ func (wsConn *wsConnection)procLoop() {
 		  panic(err) 
 		}
 
-		body, err := getText(buf, "16000")
+		body, err := BaiduAi.Speech2Text(buf, "16000")
 		if err != nil { 
 		  panic(err) 
 		} 
@@ -190,23 +144,48 @@ func (wsConn *wsConnection)procLoop() {
 		ASRE := &ASR{}
 		fmt.Println(string(body))
 		if err := json.Unmarshal(body, &ASRE); err == nil {
+			var tex string
 			if ASRE.Err_no == 0 {
 				fmt.Println(ASRE.Result[0])
-				tex := ASRE.Result[0] + "是什么？"
-				texEn, err := url.Parse(tex)
-				//fmt.Println(texEn)
-				
-				body, err := Text2Speech(texEn)
-				if err != nil {
-					panic(err)
-				}
-				
-				err = wsConn.wsWrite(msg.messageType, body)
-				if err != nil {
-					fmt.Println("write fail")
-					break
-				}
+				tex = ASRE.Result[0] + "是什么？"
+			} else {
+				tex = "I don't know what you're talking about"
 			}
+			
+			if (strings.Contains(tex, "play")) { //play
+				var data = []byte { 0, 0}
+				err = wsConn.wsWrite(msg.messageType, data)
+			} else if (strings.Contains(tex, "pause")){ //pause
+				var data = []byte { 1, 0}
+				err = wsConn.wsWrite(msg.messageType, data)
+			} else if (strings.Contains(tex, "resume")){ //resume
+				var data = []byte { 2, 0}
+				err = wsConn.wsWrite(msg.messageType, data)
+			} else if (strings.Contains(tex, "stop")){ //stop
+				var data = []byte { 3, 0}
+				err = wsConn.wsWrite(msg.messageType, data)
+			} else { // Not recognized
+				var data = []byte { 4, 0}
+				err = wsConn.wsWrite(msg.messageType, data)
+			}
+			
+			if err != nil {
+				fmt.Println("write fail")
+				break
+			}
+				
+			/*texEn, err := url.Parse(tex)
+			//fmt.Println(texEn)
+			body, err := BaiduAi.Text2Speech(texEn)
+			if err != nil {
+				panic(err)
+			}
+			
+			err = wsConn.wsWrite(msg.messageType, body)
+			if err != nil {
+				fmt.Println("write fail")
+				break
+			}*/
 		}
 	}
 }
