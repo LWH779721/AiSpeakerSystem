@@ -9,7 +9,6 @@ import (
 	"os"
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"strings"
 	"./BaiduAi"
 )
@@ -94,14 +93,6 @@ error:
 closed:
 }
 
-type ASR struct {
-	Corpus_no    	string  `json:"corpus_no"`
-	Err_msg        	string  `json:"err_msg"`
-	Err_no    		int 	`json:"err_no"`
-	Result    		[]string `json:"result"`
-	Sn    			string `json:"sn"`
-}
-
 func (wsConn *wsConnection)procLoop() {
 	// 启动一个gouroutine发送心跳
 	/*go func() {
@@ -140,53 +131,47 @@ func (wsConn *wsConnection)procLoop() {
 		if err != nil { 
 		  panic(err) 
 		} 
-		
-		ASRE := &ASR{}
-		fmt.Println(string(body))
-		if err := json.Unmarshal(body, &ASRE); err == nil {
-			var tex string
-			if ASRE.Err_no == 0 {
-				fmt.Println(ASRE.Result[0])
-				tex = ASRE.Result[0] + "是什么？"
-			} else {
-				tex = "I don't know what you're talking about"
-			}
 			
-			if (strings.Contains(tex, "play")) { //play
-				var data = []byte { 0, 0}
-				err = wsConn.wsWrite(msg.messageType, data)
-			} else if (strings.Contains(tex, "pause")){ //pause
-				var data = []byte { 1, 0}
-				err = wsConn.wsWrite(msg.messageType, data)
-			} else if (strings.Contains(tex, "resume")){ //resume
-				var data = []byte { 2, 0}
-				err = wsConn.wsWrite(msg.messageType, data)
-			} else if (strings.Contains(tex, "stop")){ //stop
-				var data = []byte { 3, 0}
-				err = wsConn.wsWrite(msg.messageType, data)
-			} else { // Not recognized
-				var data = []byte { 4, 0}
-				err = wsConn.wsWrite(msg.messageType, data)
-			}
-			
-			if err != nil {
-				fmt.Println("write fail")
-				break
-			}
-				
-			/*texEn, err := url.Parse(tex)
-			//fmt.Println(texEn)
-			body, err := BaiduAi.Text2Speech(texEn)
-			if err != nil {
-				panic(err)
-			}
-			
-			err = wsConn.wsWrite(msg.messageType, body)
-			if err != nil {
-				fmt.Println("write fail")
-				break
-			}*/
+		var tex string
+		if body.Err_no == 0 {
+			fmt.Println(body.Result[0])
+			tex = body.Result[0] + "是什么？"
+		} else {
+			tex = "I don't know what you're talking about"
 		}
+		
+		if (strings.Contains(tex, "play")) { //play
+			var data = []byte { 0, 0}
+			err = wsConn.wsWrite(msg.messageType, data)
+		} else if (strings.Contains(tex, "pause")){ //pause
+			var data = []byte { 1, 0}
+			err = wsConn.wsWrite(msg.messageType, data)
+		} else if (strings.Contains(tex, "resume")){ //resume
+			var data = []byte { 2, 0}
+			err = wsConn.wsWrite(msg.messageType, data)
+		} else if (strings.Contains(tex, "stop")){ //stop
+			var data = []byte { 3, 0}
+			err = wsConn.wsWrite(msg.messageType, data)
+		} else { // Not recognized
+			var data = []byte { 4, 0}
+			err = wsConn.wsWrite(msg.messageType, data)
+		}
+		
+		if err != nil {
+			fmt.Println("write fail")
+			break
+		}
+		
+		/*audioBuffer, err := BaiduAi.Text2Speech(tex)
+		if err != nil {
+			panic(err)
+		}
+		
+		err = wsConn.wsWrite(msg.messageType, audioBuffer)
+		if err != nil {
+			fmt.Println("write fail")
+			break
+		}*/
 	}
 }
 
