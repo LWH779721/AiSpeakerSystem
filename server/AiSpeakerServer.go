@@ -5,12 +5,14 @@ import (
 	"github.com/gorilla/websocket"
 	"errors"
 	"fmt"
+	"time"
 	"sync"
-	"os"
 	"bytes"
 	"encoding/binary"
 	"strings"
 	"./BaiduAi"
+	"./Response"
+	//"./Util"
 )
 
 // http升级websocket协议的配置
@@ -20,8 +22,6 @@ var wsUpgrader = websocket.Upgrader{
 		return true
 	},
 }
-
-var audioBuf = new(bytes.Buffer)
 
 // 客户端读写消息
 type wsMessage struct {
@@ -48,26 +48,16 @@ func (wsConn *wsConnection)wsReadLoop() {
 		if err != nil {
 			goto error
 		}
-		
-		err = binary.Write(audioBuf, binary.BigEndian, data) 
-		if err != nil { 
-		  panic(err) 
+	
+		req := &wsMessage{
+			msgType,
+			data,
 		}
-		
-		//因为百度 http 接口是上传整个文件，需要包含整句话语
-		if audioBuf.Len() > 1024*200 {
-			req := &wsMessage{
-				msgType,
-				audioBuf.Bytes(),
-			}
-			// 放入请求队列
-			select {
-			case wsConn.inChan <- req:
-			case <- wsConn.closeChan:
-				goto closed
-			}
-			
-			audioBuf.Reset()
+		// 放入请求队列
+		select {
+		case wsConn.inChan <- req:
+		case <- wsConn.closeChan:
+			goto closed
 		}
 	}
 error:
@@ -93,6 +83,62 @@ error:
 closed:
 }
 
+func sendAudio(wsConn *wsConnection, text string){
+	var buffer bytes.Buffer 
+
+	buffer.Write([]byte {0})
+	audioBuffer, err := BaiduAi.Text2Speech(text)
+	if err != nil {
+		panic(err)
+	}
+	
+	buffer.Write(audioBuffer)
+	err = wsConn.wsWrite(websocket.BinaryMessage, buffer.Bytes())
+	if err != nil {
+		fmt.Println("write fail")
+	}	
+}
+
+func sendCmd(wsConn *wsConnection, text []byte){
+	var buffer bytes.Buffer 
+
+	buffer.Write([]byte {1})
+	
+	buffer.Write(text)
+	err := wsConn.wsWrite(websocket.BinaryMessage, buffer.Bytes())
+	if err != nil {
+		fmt.Println("write fail")
+	}	
+}
+
+func handeRecognise(wsConn *wsConnection, text string){
+	var err error
+	
+	if (strings.Contains(text, "play")) { //play
+		sendCmd(wsConn, Response.PlayMusic())
+	} else if (strings.Contains(text, "next")) {
+		sendCmd(wsConn, Response.NextMusic())
+	} else if (strings.Contains(text, "pre")) {
+		sendCmd(wsConn, Response.PreMusic())
+	} else if (strings.Contains(text, "pause")){ //pause
+		sendCmd(wsConn, Response.PauseMusic())
+	} else if (strings.Contains(text, "resume")){ //resume
+		sendCmd(wsConn, Response.ResumeMusic())
+	} else if (strings.Contains(text, "stop")){ //stop
+		sendCmd(wsConn, Response.StopMusic())
+	} else if (strings.Contains(text, "your name")){
+		tex := "My name is test"
+		sendAudio(wsConn, tex)
+	} else { 
+		tex := "what's " + text
+		sendAudio(wsConn, tex)
+	}
+	
+	if err != nil {
+		fmt.Println("write fail")
+	}	
+}
+
 func (wsConn *wsConnection)procLoop() {
 	// 启动一个gouroutine发送心跳
 	/*go func() {
@@ -106,96 +152,91 @@ func (wsConn *wsConnection)procLoop() {
 		}
 	}()*/
 	
-	i := 0
-
-	// 这是一个同步处理模型（只是一个例子），如果希望并行处理可以每个请求一个gorutine，注意控制并发goroutine的数量!!!
+	start := false
+	end := false
+	buf := new(bytes.Buffer) 
+	
 	for {
 		msg, err := wsConn.wsRead()
 		if err != nil {
-			fmt.Println("read fail")
-			break
-		}
-		
-		i++
-		f, err := os.Create(string(i) + ".pcm")
-		defer f.Close()
-		f.Write(msg.data)
-	
-		buf := new(bytes.Buffer) 
-		err = binary.Write(buf, binary.BigEndian, msg.data) 
-		if err != nil { 
-		  panic(err) 
-		}
-
-		body, err := BaiduAi.Speech2Text(buf, "16000")
-		if err != nil { 
-		  panic(err) 
-		} 
-			
-		var tex string
-		if body.Err_no == 0 {
-			fmt.Println(body.Result[0])
-			tex = body.Result[0] + "是什么？"
+			if start == false {
+				continue
+			} else {
+				end = true
+			}
 		} else {
-			tex = "I don't know what you're talking about"
+			start = true
 		}
+		 
+		if end == false { 
+			err = binary.Write(buf, binary.BigEndian, msg.data) 
+			if err != nil { 
+			  panic(err) 
+			}
+		} else {
+			body, err := BaiduAi.Speech2Text(buf, "16000")
+			if err != nil { 
+			  panic(err) 
+			} 
 		
-		if (strings.Contains(tex, "play")) { //play
-			var data = []byte { 0, 0}
-			err = wsConn.wsWrite(msg.messageType, data)
-		} else if (strings.Contains(tex, "pause")){ //pause
-			var data = []byte { 1, 0}
-			err = wsConn.wsWrite(msg.messageType, data)
-		} else if (strings.Contains(tex, "resume")){ //resume
-			var data = []byte { 2, 0}
-			err = wsConn.wsWrite(msg.messageType, data)
-		} else if (strings.Contains(tex, "stop")){ //stop
-			var data = []byte { 3, 0}
-			err = wsConn.wsWrite(msg.messageType, data)
-		} else { // Not recognized
-			var data = []byte { 4, 0}
-			err = wsConn.wsWrite(msg.messageType, data)
+			var tex string
+			if body.Err_no == 0 {
+				fmt.Println(body.Result[0])
+				tex = body.Result[0]
+				handeRecognise(wsConn, tex)
+			} else {
+				tex = "I don't know what you're talking about"
+				var buffer bytes.Buffer 
+
+				buffer.Write([]byte {0})
+
+				audioBuffer, err := BaiduAi.Text2Speech(tex)
+				if err != nil {
+					panic(err)
+				}
+				
+				buffer.Write(audioBuffer)
+
+				err = wsConn.wsWrite(websocket.BinaryMessage, buffer.Bytes())
+				if err != nil {
+					fmt.Println("write fail")
+					break
+				}
+			}
+			
+			start = false
+			end = false
+			buf.Reset()
 		}
-		
-		if err != nil {
-			fmt.Println("write fail")
-			break
-		}
-		
-		/*audioBuffer, err := BaiduAi.Text2Speech(tex)
-		if err != nil {
-			panic(err)
-		}
-		
-		err = wsConn.wsWrite(msg.messageType, audioBuffer)
-		if err != nil {
-			fmt.Println("write fail")
-			break
-		}*/
 	}
 }
 
-func wsHandler(resp http.ResponseWriter, req *http.Request) {
+func aiHandler(resp http.ResponseWriter, req *http.Request) {
 	// 应答客户端告知升级连接为websocket
 	wsSocket, err := wsUpgrader.Upgrade(resp, req, nil)
 	if err != nil {
 		return
 	}
-	wsConn := &wsConnection{
+	
+	aiConn := &wsConnection{
 		wsSocket: wsSocket,
-		inChan: make(chan *wsMessage, 1000),
-		outChan: make(chan *wsMessage, 1000),
+		inChan: make(chan *wsMessage, 150000),
+		outChan: make(chan *wsMessage, 150000),
 		closeChan: make(chan byte),
 		isClosed: false,
 	}
 
 	// 处理器
-	go wsConn.procLoop()
+	go aiConn.procLoop()
 	// 读协程
-	go wsConn.wsReadLoop()
+	go aiConn.wsReadLoop()
 	// 写协程
-	go wsConn.wsWriteLoop()
+	go aiConn.wsWriteLoop()
 }
+
+/*func musicHandler(resp http.ResponseWriter, req *http.Request) {
+
+}*/
 
 func (wsConn *wsConnection)wsWrite(messageType int, data []byte) error {
 	select {
@@ -211,6 +252,9 @@ func (wsConn *wsConnection)wsRead() (*wsMessage, error) {
 	case msg := <- wsConn.inChan:
 		return msg, nil
 	case <- wsConn.closeChan:
+	case <-time.After(400 * time.Millisecond):
+		//fmt.Println("timeout")
+		return nil, errors.New("timeout")
 	}
 	return nil, errors.New("websocket closed")
 }
@@ -227,6 +271,7 @@ func (wsConn *wsConnection)wsClose() {
 }
 
 func main() {
-	http.HandleFunc("/ws", wsHandler)
+	http.HandleFunc("/ai", aiHandler)
+	//http.HandleFunc("/music", musicHandler)
 	http.ListenAndServe("0.0.0.0:7777", nil)
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"encoding/json"
+	"strings"
 )
 
 type ASR struct {
@@ -106,7 +107,7 @@ func Text2Speech(text string) ([]byte, error) {
 	textEncode, err := url.Parse(text)
 	fmt.Println(textEncode)
 	
-	req, err := http.NewRequest("GET", "http://tsn.baidu.com/text2audio?tex=" + textEncode.EscapedPath() + "&lan=en&cuid=80001&ctp=1&tok=" + accessToken, nil)
+	req, err := http.NewRequest("GET", "http://tsn.baidu.com/text2audio?tex=" + textEncode.EscapedPath() + "&lan=zh&cuid=80001&ctp=1&aue=3&per=4&spd=7&tok=" + accessToken, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +126,14 @@ func Text2Speech(text string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	
+	header := resp.Header
+	if strings.Contains(header["Content-Type"][0], "audio") != true {
+		fmt.Println(string(body))
+		msg := fmt.Sprintf("handlePost statuscode=%d, body=%s", resp.StatusCode, body)
+		return nil, errors.New(msg)
+	}
+	
 	if resp.StatusCode != 200 {
 		msg := fmt.Sprintf("handlePost statuscode=%d, body=%s", resp.StatusCode, body)
 		return nil, errors.New(msg)
