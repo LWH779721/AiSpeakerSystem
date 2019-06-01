@@ -48,7 +48,7 @@ func (wsConn *wsConnection)wsReadLoop() {
 		if err != nil {
 			goto error
 		}
-	
+		
 		req := &wsMessage{
 			msgType,
 			data,
@@ -234,10 +234,6 @@ func aiHandler(resp http.ResponseWriter, req *http.Request) {
 	go aiConn.wsWriteLoop()
 }
 
-/*func musicHandler(resp http.ResponseWriter, req *http.Request) {
-
-}*/
-
 func (wsConn *wsConnection)wsWrite(messageType int, data []byte) error {
 	select {
 	case wsConn.outChan <- &wsMessage{messageType, data,}:
@@ -271,7 +267,10 @@ func (wsConn *wsConnection)wsClose() {
 }
 
 func main() {
+	//http.HandleFunc("/ai", aiHandler)
+	//http.ListenAndServe("0.0.0.0:7777", nil)
+	
+	//websocket + openssl
 	http.HandleFunc("/ai", aiHandler)
-	//http.HandleFunc("/music", musicHandler)
-	http.ListenAndServe("0.0.0.0:7777", nil)
+	http.ListenAndServeTLS(":8000", "cert.pem", "key.pem", nil) 
 }
