@@ -19,3 +19,16 @@ func Save2Fle(audio []byte) (error){
 	
 	return nil
 }
+
+func GeneratorMp3file(mp3 []byte, name string) (error){ 
+	
+	f, err := os.Create(name + ".mp3")
+	defer f.Close()
+	if err != nil {
+		return err
+	}
+	
+	f.Write(mp3)
+	
+	return nil
+}
